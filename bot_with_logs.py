@@ -60,6 +60,9 @@ GEMINI_API_KEYS = [
 # Groq API ключ (запасной провайдер, 14,400 запросов/день бесплатно)
 GROQ_API_KEY = "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"  # Получи на https://console.groq.com/keys
 
+# OpenRouter API ключ (бесплатный Gemini через прокси)
+OPENROUTER_API_KEY = ""  # Получи на https://openrouter.ai/keys (опционально, работает и без ключа)
+
 current_key_index = 0  # Индекс текущего ключа
 
 def get_next_api_key():
@@ -382,14 +385,12 @@ async def process_model_selection(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=keyboard)
     await callback.answer(f"{emoji[model_choice]} Модель изменена на: {model_choice}")
 
-async def try_groq(user_id, request_text, history_text):
-    """Запасной вариант через Groq API"""
+async def try_groq(user_id, request_text, history_text, has_photo=False, photo_base64=None):
+    """Запасной вариант через Groq API (поддерживает фото через Vision модель)"""
     if not GROQ_API_KEY:
         return None
     
     try:
-        logging.info(f"🔄 Пробую Groq API для пользователя {user_id}")
-        
         # Формируем историю для Groq
         messages = [{"role": "system", "content": DEFAULT_PROMPT}]
         
@@ -397,7 +398,26 @@ async def try_groq(user_id, request_text, history_text):
         if history_text:
             messages.append({"role": "user", "content": history_text})
         
-        messages.append({"role": "user", "content": request_text})
+        # Если есть фото - используем Vision модель
+        if has_photo and photo_base64:
+            logging.info(f"📷 Пробую Groq Vision API для пользователя {user_id}")
+            messages.append({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": request_text},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{photo_base64}"
+                        }
+                    }
+                ]
+            })
+            model = "llama-3.2-90b-vision-preview"  # Vision модель
+        else:
+            logging.info(f"🔄 Пробую Groq API для пользователя {user_id}")
+            messages.append({"role": "user", "content": request_text})
+            model = "llama-3.3-70b-versatile"  # Быстрая текстовая модель
         
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
@@ -407,7 +427,7 @@ async def try_groq(user_id, request_text, history_text):
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "llama-3.3-70b-versatile",  # Быстрая и умная модель
+                    "model": model,
                     "messages": messages,
                     "temperature": 0.7,
                     "max_tokens": 2000
@@ -445,24 +465,30 @@ async def handle_msg(message: types.Message):
     
     current_parts = [g_types.Part(text=request_text)]
     has_photo = False
+    photo_base64 = None
     
     if message.photo:
         has_photo = True
         logging.info(f"📷 Обработка фото от пользователя {user_id}")
         file = await bot.get_file(message.photo[-1].file_id)
         file_bytes = await bot.download_file(file.file_path)
-        current_parts.append(g_types.Part.from_bytes(data=file_bytes.read(), mime_type="image/jpeg"))
+        photo_data = file_bytes.read()
+        current_parts.append(g_types.Part.from_bytes(data=photo_data, mime_type="image/jpeg"))
+        
+        # Конвертируем в base64 для Groq Vision
+        import base64
+        photo_base64 = base64.b64encode(photo_data).decode('utf-8')
     
     # Если пользователь выбрал только Groq
-    if preferred_model == "groq" and not has_photo:
-        logging.info(f"⚡ Пользователь {user_id} выбрал Groq, пропускаю Gemini")
+    if preferred_model == "groq":
+        logging.info(f"⚡ Пользователь {user_id} выбрал Groq")
         
         history_text = ""
         for h in history[-6:]:
             if h.parts and h.parts[0].text:
                 history_text += f"{h.role}: {h.parts[0].text}\n"
         
-        groq_response = await try_groq(user_id, request_text, history_text)
+        groq_response = await try_groq(user_id, request_text, history_text, has_photo, photo_base64)
         
         if groq_response:
             save_history(user_id, "user", request_text)
@@ -475,11 +501,6 @@ async def handle_msg(message: types.Message):
         else:
             await message.answer("⚠️ Groq API недоступен. Попробуй /model auto")
             return
-    
-    # Если пользователь выбрал только Groq, но отправил фото
-    if preferred_model == "groq" and has_photo:
-        await message.answer("⚠️ Groq не поддерживает фото. Используй /model gemini или /model auto")
-        return
     
     # Пробуем модели Gemini (если не выбран только Groq)
     if preferred_model != "groq":
@@ -561,8 +582,8 @@ async def handle_msg(message: types.Message):
                     logging.error(f"❌ Ошибка с моделью {model_name} для пользователя {user_id}: {e}")
                     continue
     
-    # Если все Gemini модели не сработали и нет фото - пробуем Groq (только для auto режима)
-    if not has_photo and preferred_model != "gemini":
+    # Если все Gemini модели не сработали - пробуем Groq (для auto режима)
+    if preferred_model != "gemini":
         logging.info(f"🔄 Все Gemini модели недоступны, пробую Groq для пользователя {user_id}")
         
         history_text = ""
@@ -570,7 +591,7 @@ async def handle_msg(message: types.Message):
             if h.parts and h.parts[0].text:
                 history_text += f"{h.role}: {h.parts[0].text}\n"
         
-        groq_response = await try_groq(user_id, request_text, history_text)
+        groq_response = await try_groq(user_id, request_text, history_text, has_photo, photo_base64)
         
         if groq_response:
             save_history(user_id, "user", request_text)
