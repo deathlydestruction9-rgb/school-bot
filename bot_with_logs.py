@@ -229,8 +229,8 @@ def get_user_model(user_id):
     """Получить выбранную пользователем модель"""
     with sqlite3.connect(DB_NAME) as conn:
         res = conn.execute("SELECT preferred_model FROM user_settings WHERE user_id = ?", (user_id,)).fetchone()
-        # По умолчанию auto - сначала Gemini (для фото), потом Groq
-        return res[0] if res else "auto"
+        # По умолчанию groq - быстрее и стабильнее
+        return res[0] if res else "groq"
 
 def set_user_model(user_id, model_name):
     """Установить предпочитаемую модель для пользователя"""
@@ -332,8 +332,8 @@ async def cmd_model(message: types.Message):
 
 Текущая модель: {current_model}
 
-🤖 Gemini - умный, работает с фото
-⚡ Groq - быстрый, только текст
+🤖 Gemini - для фото (работает только на Railway)
+⚡ Groq - быстрый, только текст (рекомендуется)
 🔄 Авто - сначала Gemini, потом Groq"""
     
     await message.answer(text, reply_markup=keyboard)
