@@ -1,0 +1,213 @@
+═══════════════════════════════════════════════════════════
+  ПОШАГОВАЯ ИНСТРУКЦИЯ: ДЕПЛОЙ БОТА НА VPS
+═══════════════════════════════════════════════════════════
+
+ШАГ 1: ПОДКЛЮЧЕНИЕ К VPS
+═══════════════════════════════════════════════════════════
+
+В терминале (у тебя уже открыт):
+   ssh root@IP_АДРЕС_VPS
+
+Введи пароль когда попросит.
+
+═══════════════════════════════════════════════════════════
+
+ШАГ 2: УСТАНОВКА PYTHON И ЗАВИСИМОСТЕЙ
+═══════════════════════════════════════════════════════════
+
+# Обновляем систему
+apt update && apt upgrade -y
+
+# Устанавливаем Python 3.11+ и pip
+apt install python3 python3-pip python3-venv -y
+
+# Проверяем версию Python (должна быть 3.11+)
+python3 --version
+
+═══════════════════════════════════════════════════════════
+
+ШАГ 3: СОЗДАЕМ ПАПКУ ДЛЯ БОТА
+═══════════════════════════════════════════════════════════
+
+# Создаем папку
+mkdir -p /root/telegram-bot
+cd /root/telegram-bot
+
+═══════════════════════════════════════════════════════════
+
+ШАГ 4: ЗАГРУЖАЕМ ФАЙЛЫ НА VPS
+═══════════════════════════════════════════════════════════
+
+ВАРИАНТ А: Через nano (копируем содержимое файлов)
+
+1. Создаем bot_with_logs.py:
+   nano bot_with_logs.py
+   
+   • Скопируй весь код из bot_with_logs.py
+   • Вставь в nano (Ctrl+Shift+V или правая кнопка мыши)
+   • Сохрани: Ctrl+O, Enter, Ctrl+X
+
+2. Создаем requirements.txt:
+   nano requirements.txt
+   
+   • Скопируй содержимое requirements.txt
+   • Вставь
+   • Сохрани: Ctrl+O, Enter, Ctrl+X
+
+ВАРИАНТ Б: Через SCP (с твоего компьютера)
+
+Открой НОВЫЙ терминал на своем ПК:
+   scp bot_with_logs.py root@IP_VPS:/root/telegram-bot/
+   scp requirements.txt root@IP_VPS:/root/telegram-bot/
+
+═══════════════════════════════════════════════════════════
+
+ШАГ 5: УСТАНАВЛИВАЕМ ЗАВИСИМОСТИ
+═══════════════════════════════════════════════════════════
+
+cd /root/telegram-bot
+
+# Создаем виртуальное окружение
+python3 -m venv venv
+
+# Активируем
+source venv/bin/activate
+
+# Устанавливаем зависимости
+pip install -r requirements.txt
+
+═══════════════════════════════════════════════════════════
+
+ШАГ 6: НАСТРАИВАЕМ ПРОКСИ (ЕСЛИ НУЖЕН)
+═══════════════════════════════════════════════════════════
+
+Если на VPS нет доступа к Telegram/Google API:
+
+# Устанавливаем Xray
+bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+
+# Настраиваем конфиг (если нужно)
+nano /usr/local/etc/xray/config.json
+
+# Запускаем Xray
+systemctl start xray
+systemctl enable xray
+
+ЕСЛИ ПРОКСИ НЕ НУЖЕН:
+Отредактируй bot_with_logs.py и закомментируй строки с прокси:
+   nano bot_with_logs.py
+   
+   Найди и закомментируй (#):
+   # PROXY_URL = "http://127.0.0.1:10809"
+   # os.environ['https_proxy'] = PROXY_URL
+   # os.environ['http_proxy'] = PROXY_URL
+   # session = AiohttpSession(proxy=PROXY_URL)
+   
+   Замени на:
+   session = AiohttpSession()
+
+═══════════════════════════════════════════════════════════
+
+ШАГ 7: ТЕСТОВЫЙ ЗАПУСК
+═══════════════════════════════════════════════════════════
+
+# Активируем окружение (если не активировано)
+source venv/bin/activate
+
+# Запускаем бота
+python3 bot_with_logs.py
+
+Должно появиться:
+   ✅ База данных инициализирована
+   ✅ Команды бота установлены
+   🚀 БОТ ЗАПУЩЕН И ГОТОВ К РАБОТЕ!
+
+Протестируй бота в Telegram!
+
+Остановка: Ctrl+C
+
+═══════════════════════════════════════════════════════════
+
+ШАГ 8: ЗАПУСК В ФОНЕ (SYSTEMD SERVICE)
+═══════════════════════════════════════════════════════════
+
+Создаем systemd сервис:
+   nano /etc/systemd/system/telegram-bot.service
+
+Вставь:
+───────────────────────────────────────────────────────────
+[Unit]
+Description=Telegram School Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/telegram-bot
+Environment="PATH=/root/telegram-bot/venv/bin"
+ExecStart=/root/telegram-bot/venv/bin/python3 /root/telegram-bot/bot_with_logs.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+───────────────────────────────────────────────────────────
+
+Сохрани: Ctrl+O, Enter, Ctrl+X
+
+Запускаем сервис:
+   systemctl daemon-reload
+   systemctl start telegram-bot
+   systemctl enable telegram-bot
+
+Проверяем статус:
+   systemctl status telegram-bot
+
+Смотрим логи:
+   journalctl -u telegram-bot -f
+
+═══════════════════════════════════════════════════════════
+
+УПРАВЛЕНИЕ БОТОМ:
+═══════════════════════════════════════════════════════════
+
+Запуск:     systemctl start telegram-bot
+Остановка:  systemctl stop telegram-bot
+Перезапуск: systemctl restart telegram-bot
+Статус:     systemctl status telegram-bot
+Логи:       journalctl -u telegram-bot -f
+
+═══════════════════════════════════════════════════════════
+
+ОБНОВЛЕНИЕ БОТА:
+═══════════════════════════════════════════════════════════
+
+1. Останови бота:
+   systemctl stop telegram-bot
+
+2. Обнови файл:
+   nano /root/telegram-bot/bot_with_logs.py
+   (или загрузи через scp)
+
+3. Запусти:
+   systemctl start telegram-bot
+
+═══════════════════════════════════════════════════════════
+
+ПОЛЕЗНЫЕ КОМАНДЫ:
+═══════════════════════════════════════════════════════════
+
+# Проверить что бот работает
+ps aux | grep bot_with_logs
+
+# Посмотреть последние 50 строк логов
+journalctl -u telegram-bot -n 50
+
+# Очистить базу данных
+rm /root/telegram-bot/bot_data.db
+systemctl restart telegram-bot
+
+# Проверить использование ресурсов
+htop
+
+═══════════════════════════════════════════════════════════
