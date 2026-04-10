@@ -61,6 +61,9 @@ GEMINI_API_KEYS = [
 GROQ_API_KEY = "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"  # Получи на https://console.groq.com/keys
 
 # OpenRouter API ключ (бесплатный Gemini через прокси)
+OPENROUTER_API_KEY = ""  # Получи на https://openrouter.ai/keys
+
+# OpenRouter API ключ (бесплатный Gemini через прокси)
 OPENROUTER_API_KEY = ""  # Получи на https://openrouter.ai/keys (опционально, работает и без ключа)
 
 current_key_index = 0  # Индекс текущего ключа
@@ -414,12 +417,18 @@ async def try_openrouter(user_id, request_text, history_text, has_photo=False, p
             messages.append({"role": "user", "content": request_text})
         
         async with httpx.AsyncClient(timeout=30.0) as client:
+            headers = {
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://github.com/school-bot",
+            }
+            
+            # Добавляем API ключ если есть
+            if OPENROUTER_API_KEY:
+                headers["Authorization"] = f"Bearer {OPENROUTER_API_KEY}"
+            
             response = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://github.com/school-bot",
-                },
+                headers=headers,
                 json={
                     "model": "google/gemini-2.0-flash-exp:free",  # Бесплатная Gemini
                     "messages": messages,
@@ -441,11 +450,18 @@ async def try_openrouter(user_id, request_text, history_text, has_photo=False, p
         return None
 
 async def try_groq(user_id, request_text, history_text, has_photo=False, photo_base64=None):
-    """Запасной вариант через Groq API (поддерживает фото через Vision модель)"""
+    """Запасной вариант через Groq API (только текст, Vision модели устарели)"""
     if not GROQ_API_KEY:
         return None
     
+    # Groq Vision больше не работает - пропускаем фото
+    if has_photo:
+        logging.info(f"⚠️ Groq не поддерживает фото (Vision модели устарели)")
+        return None
+    
     try:
+        logging.info(f"🔄 Пробую Groq API для пользователя {user_id}")
+        
         # Формируем историю для Groq
         messages = [{"role": "system", "content": DEFAULT_PROMPT}]
         
@@ -453,26 +469,8 @@ async def try_groq(user_id, request_text, history_text, has_photo=False, photo_b
         if history_text:
             messages.append({"role": "user", "content": history_text})
         
-        # Если есть фото - используем Vision модель
-        if has_photo and photo_base64:
-            logging.info(f"📷 Пробую Groq Vision API для пользователя {user_id}")
-            messages.append({
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": request_text},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{photo_base64}"
-                        }
-                    }
-                ]
-            })
-            model = "llama-3.2-11b-vision-preview"  # Новая Vision модель (90b устарела)
-        else:
-            logging.info(f"🔄 Пробую Groq API для пользователя {user_id}")
-            messages.append({"role": "user", "content": request_text})
-            model = "llama-3.3-70b-versatile"  # Быстрая текстовая модель
+        messages.append({"role": "user", "content": request_text})
+        model = "llama-3.3-70b-versatile"  # Быстрая текстовая модель
         
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
