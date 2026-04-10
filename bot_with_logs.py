@@ -440,7 +440,8 @@ async def try_groq(user_id, request_text, history_text, has_photo=False, photo_b
                 logging.info(f"✅ Groq API успешно ответил пользователю {user_id}")
                 return answer
             else:
-                logging.warning(f"⚠️ Groq API вернул код {response.status_code}")
+                error_data = response.json() if response.text else {}
+                logging.warning(f"⚠️ Groq API вернул код {response.status_code}: {error_data}")
                 return None
                 
     except Exception as e:
