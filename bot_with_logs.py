@@ -385,6 +385,61 @@ async def process_model_selection(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=keyboard)
     await callback.answer(f"{emoji[model_choice]} Модель изменена на: {model_choice}")
 
+async def try_openrouter(user_id, request_text, history_text, has_photo=False, photo_base64=None):
+    """OpenRouter - бесплатный прокси для Gemini с поддержкой фото"""
+    try:
+        # Формируем историю
+        messages = [{"role": "system", "content": DEFAULT_PROMPT}]
+        
+        if history_text:
+            messages.append({"role": "user", "content": history_text})
+        
+        # Если есть фото
+        if has_photo and photo_base64:
+            logging.info(f"📷 Пробую OpenRouter (Gemini через прокси) для пользователя {user_id}")
+            messages.append({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": request_text},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{photo_base64}"
+                        }
+                    }
+                ]
+            })
+        else:
+            logging.info(f"🔄 Пробую OpenRouter для пользователя {user_id}")
+            messages.append({"role": "user", "content": request_text})
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://github.com/school-bot",
+                },
+                json={
+                    "model": "google/gemini-2.0-flash-exp:free",  # Бесплатная Gemini
+                    "messages": messages,
+                }
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                answer = data["choices"][0]["message"]["content"]
+                logging.info(f"✅ OpenRouter успешно ответил пользователю {user_id}")
+                return answer
+            else:
+                error_data = response.json() if response.text else {}
+                logging.warning(f"⚠️ OpenRouter вернул код {response.status_code}: {error_data}")
+                return None
+                
+    except Exception as e:
+        logging.error(f"❌ Ошибка OpenRouter для пользователя {user_id}: {e}")
+        return None
+
 async def try_groq(user_id, request_text, history_text, has_photo=False, photo_base64=None):
     """Запасной вариант через Groq API (поддерживает фото через Vision модель)"""
     if not GROQ_API_KEY:
@@ -489,6 +544,19 @@ async def handle_msg(message: types.Message):
             if h.parts and h.parts[0].text:
                 history_text += f"{h.role}: {h.parts[0].text}\n"
         
+        # Сначала пробуем OpenRouter (для фото)
+        if has_photo:
+            openrouter_response = await try_openrouter(user_id, request_text, history_text, has_photo, photo_base64)
+            if openrouter_response:
+                save_history(user_id, "user", request_text)
+                save_history(user_id, "model", openrouter_response)
+                update_stats(user_id)
+                
+                await message.answer(openrouter_response, parse_mode=None)
+                logging.info(f"✅ OpenRouter ответ отправлен пользователю {user_id}")
+                return
+        
+        # Если нет фото или OpenRouter не сработал - пробуем Groq
         groq_response = await try_groq(user_id, request_text, history_text, has_photo, photo_base64)
         
         if groq_response:
@@ -500,7 +568,7 @@ async def handle_msg(message: types.Message):
             logging.info(f"✅ Groq ответ отправлен пользователю {user_id}")
             return
         else:
-            await message.answer("⚠️ Groq API недоступен. Попробуй /model auto")
+            await message.answer("⚠️ Все API недоступны. Попробуй позже")
             return
     
     # Пробуем модели Gemini (если не выбран только Groq)
@@ -583,15 +651,28 @@ async def handle_msg(message: types.Message):
                     logging.error(f"❌ Ошибка с моделью {model_name} для пользователя {user_id}: {e}")
                     continue
     
-    # Если все Gemini модели не сработали - пробуем Groq (для auto режима)
+    # Если все Gemini модели не сработали - пробуем OpenRouter и Groq (для auto режима)
     if preferred_model != "gemini":
-        logging.info(f"🔄 Все Gemini модели недоступны, пробую Groq для пользователя {user_id}")
+        logging.info(f"🔄 Все Gemini модели недоступны, пробую альтернативы для пользователя {user_id}")
         
         history_text = ""
         for h in history[-6:]:
             if h.parts and h.parts[0].text:
                 history_text += f"{h.role}: {h.parts[0].text}\n"
         
+        # Сначала пробуем OpenRouter (особенно для фото)
+        if has_photo:
+            openrouter_response = await try_openrouter(user_id, request_text, history_text, has_photo, photo_base64)
+            if openrouter_response:
+                save_history(user_id, "user", request_text)
+                save_history(user_id, "model", openrouter_response)
+                update_stats(user_id)
+                
+                await message.answer(openrouter_response, parse_mode=None)
+                logging.info(f"✅ OpenRouter ответ отправлен пользователю {user_id}")
+                return
+        
+        # Потом пробуем Groq
         groq_response = await try_groq(user_id, request_text, history_text, has_photo, photo_base64)
         
         if groq_response:
