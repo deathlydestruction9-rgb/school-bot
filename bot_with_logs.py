@@ -425,6 +425,9 @@ async def try_openrouter(user_id, request_text, history_text, has_photo=False, p
             # Добавляем API ключ если есть
             if OPENROUTER_API_KEY:
                 headers["Authorization"] = f"Bearer {OPENROUTER_API_KEY}"
+                logging.info(f"🔑 Использую OpenRouter API ключ: ...{OPENROUTER_API_KEY[-8:]}")
+            else:
+                logging.warning(f"⚠️ OpenRouter API ключ не найден!")
             
             response = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
