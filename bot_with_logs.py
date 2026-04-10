@@ -413,7 +413,7 @@ async def try_groq(user_id, request_text, history_text, has_photo=False, photo_b
                     }
                 ]
             })
-            model = "llama-3.2-90b-vision-preview"  # Vision модель
+            model = "llama-3.2-11b-vision-preview"  # Новая Vision модель (90b устарела)
         else:
             logging.info(f"🔄 Пробую Groq API для пользователя {user_id}")
             messages.append({"role": "user", "content": request_text})
