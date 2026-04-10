@@ -61,7 +61,7 @@ GEMINI_API_KEYS = [
 GROQ_API_KEY = "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"  # Получи на https://console.groq.com/keys
 
 # OpenRouter API ключ (бесплатный Gemini через прокси)
-OPENROUTER_API_KEY = "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"  # Получи на https://openrouter.ai/keys
+OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY', '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')  # Получи на https://openrouter.ai/keys
 
 # OpenRouter API ключ (бесплатный Gemini через прокси)
 OPENROUTER_API_KEY = ""  # Получи на https://openrouter.ai/keys (опционально, работает и без ключа)
