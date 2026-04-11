@@ -14,7 +14,7 @@ import httpx
 
 # Отслеживание последнего использования каждого ключа
 last_key_usage = {}
-KEY_COOLDOWN = 4  # Секунды между запросами к одному ключу (15 req/min = 1 req/4 sec)
+KEY_COOLDOWN = 2  # Секунды между запросами к одному ключу
 
 def clean_latex(text):
     """Удаляет LaTeX и Markdown форматирование из текста"""
@@ -98,26 +98,18 @@ def get_next_api_key():
     last_key_usage[key] = time.time()
     return key
 
-# Прокси для обхода блокировок
-PROXY_URL = "http://127.0.0.1:10809"  # Твой Xray
-
-# Настройка прокси для Gemini
-os.environ['https_proxy'] = PROXY_URL
-os.environ['http_proxy'] = PROXY_URL
-
-# Создаем бота с прокси для Telegram
-from aiogram.client.session.aiohttp import AiohttpSession
-
-session = AiohttpSession(proxy=PROXY_URL)
-bot = Bot(token=TELEGRAM_TOKEN, session=session)
+# БЕЗ ПРОКСИ (VPS в Германии)
+bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
 CURRENT_MODEL = "gemini-2.0-flash"
 
-# Список моделей для автоматического переключения (в порядке приоритета)
+# Список моделей для автоматического переключения (ТОЛЬКО БЫСТРЫЕ!)
 FALLBACK_MODELS = [
-    "gemini-flash-lite-latest",       # РАБОТАЕТ! Быстрая (2с)
-    "gemini-3.1-flash-lite-preview",  # РАБОТАЕТ! (4.5с)
+    "gemini-1.5-flash-latest",        # Последняя стабильная
+    "gemini-1.5-flash",               # Базовая 1.5
+    "gemini-1.5-pro-latest",          # Pro версия
+]
     "gemini-flash-latest",            # Последняя flash
     "gemini-3-flash-preview",         # Flash preview
     "gemini-3.1-flash-image-preview", # Image preview
