@@ -14,7 +14,7 @@ import httpx
 
 # Отслеживание последнего использования каждого ключа
 last_key_usage = {}
-KEY_COOLDOWN = 2  # Секунды между запросами к одному ключу (быстрее)
+KEY_COOLDOWN = 4  # Секунды между запросами к одному ключу (15 req/min = 1 req/4 sec)
 
 def clean_latex(text):
     """Удаляет LaTeX и Markdown форматирование из текста"""
@@ -60,12 +60,6 @@ GEMINI_API_KEYS = [
 # Groq API ключ (запасной провайдер, 14,400 запросов/день бесплатно)
 GROQ_API_KEY = "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"  # Получи на https://console.groq.com/keys
 
-# OpenRouter API ключ (бесплатный Gemini через прокси)
-OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY', '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')  # Получи на https://openrouter.ai/keys
-
-# OpenRouter API ключ (бесплатный Gemini через прокси)
-OPENROUTER_API_KEY = ""  # Получи на https://openrouter.ai/keys (опционально, работает и без ключа)
-
 current_key_index = 0  # Индекс текущего ключа
 
 def get_next_api_key():
@@ -104,27 +98,32 @@ def get_next_api_key():
     last_key_usage[key] = time.time()
     return key
 
-# Прокси НЕ НУЖЕН на Railway (серверы за границей)
-# Если запускаешь локально в России - раскомментируй строки ниже:
-# PROXY_URL = "http://127.0.0.1:10809"
-# os.environ['https_proxy'] = PROXY_URL
-# os.environ['http_proxy'] = PROXY_URL
-# from aiogram.client.session.aiohttp import AiohttpSession
-# session = AiohttpSession(proxy=PROXY_URL)
-# bot = Bot(token=TELEGRAM_TOKEN, session=session)
+# Прокси для обхода блокировок
+PROXY_URL = "http://127.0.0.1:10809"  # Твой Xray
 
-# Для Railway (без прокси):
-bot = Bot(token=TELEGRAM_TOKEN)
+# Настройка прокси для Gemini
+os.environ['https_proxy'] = PROXY_URL
+os.environ['http_proxy'] = PROXY_URL
+
+# Создаем бота с прокси для Telegram
+from aiogram.client.session.aiohttp import AiohttpSession
+
+session = AiohttpSession(proxy=PROXY_URL)
+bot = Bot(token=TELEGRAM_TOKEN, session=session)
 dp = Dispatcher()
 
 CURRENT_MODEL = "gemini-2.0-flash"
 
-# Список моделей для автоматического переключения (ТОЛЬКО РАБОЧИЕ И БЫСТРЫЕ!)
+# Список моделей для автоматического переключения (в порядке приоритета)
 FALLBACK_MODELS = [
-    "gemini-1.5-flash-latest",        # Последняя стабильная
-    "gemini-1.5-flash",               # Базовая 1.5
-    "gemini-1.5-pro-latest",          # Pro версия
-    "models/gemini-1.5-flash",        # С префиксом models/
+    "gemini-flash-lite-latest",       # РАБОТАЕТ! Быстрая (2с)
+    "gemini-3.1-flash-lite-preview",  # РАБОТАЕТ! (4.5с)
+    "gemini-flash-latest",            # Последняя flash
+    "gemini-3-flash-preview",         # Flash preview
+    "gemini-3.1-flash-image-preview", # Image preview
+    "gemini-2.0-flash",               # Полная 2.0
+    "gemini-2.0-flash-001",           # Стабильная 2.0
+    "gemini-pro-latest"               # Pro как последний вариант
 ]
 
 DEFAULT_PROMPT = """Ты — универсальный школьный помощник. Твоя задача — выдавать готовые решения, которые можно сразу переписывать в тетрадь без исправлений.
@@ -235,8 +234,8 @@ def get_user_model(user_id):
     """Получить выбранную пользователем модель"""
     with sqlite3.connect(DB_NAME) as conn:
         res = conn.execute("SELECT preferred_model FROM user_settings WHERE user_id = ?", (user_id,)).fetchone()
-        # По умолчанию groq - быстрее и стабильнее
-        return res[0] if res else "groq"
+        # По умолчанию auto - сначала Gemini (для фото), потом Groq
+        return res[0] if res else "auto"
 
 def set_user_model(user_id, model_name):
     """Установить предпочитаемую модель для пользователя"""
@@ -338,8 +337,8 @@ async def cmd_model(message: types.Message):
 
 Текущая модель: {current_model}
 
-🤖 Gemini - для фото (работает только на Railway)
-⚡ Groq - быстрый, только текст (рекомендуется)
+🤖 Gemini - умный, работает с фото
+⚡ Groq - быстрый, только текст
 🔄 Авто - сначала Gemini, потом Groq"""
     
     await message.answer(text, reply_markup=keyboard)
@@ -388,82 +387,13 @@ async def process_model_selection(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=keyboard)
     await callback.answer(f"{emoji[model_choice]} Модель изменена на: {model_choice}")
 
-async def try_openrouter(user_id, request_text, history_text, has_photo=False, photo_base64=None):
-    """OpenRouter - бесплатный прокси для Gemini с поддержкой фото"""
-    try:
-        # Формируем историю
-        messages = [{"role": "system", "content": DEFAULT_PROMPT}]
-        
-        if history_text:
-            messages.append({"role": "user", "content": history_text})
-        
-        # Если есть фото
-        if has_photo and photo_base64:
-            logging.info(f"📷 Пробую OpenRouter (Gemini через прокси) для пользователя {user_id}")
-            messages.append({
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": request_text},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{photo_base64}"
-                        }
-                    }
-                ]
-            })
-        else:
-            logging.info(f"🔄 Пробую OpenRouter для пользователя {user_id}")
-            messages.append({"role": "user", "content": request_text})
-        
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            headers = {
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/school-bot",
-            }
-            
-            # Добавляем API ключ если есть
-            if OPENROUTER_API_KEY:
-                headers["Authorization"] = f"Bearer {OPENROUTER_API_KEY}"
-                logging.info(f"🔑 Использую OpenRouter API ключ: ...{OPENROUTER_API_KEY[-8:]}")
-            else:
-                logging.warning(f"⚠️ OpenRouter API ключ не найден!")
-            
-            response = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers=headers,
-                json={
-                    "model": "google/gemini-2.0-flash-exp:free",  # Бесплатная Gemini
-                    "messages": messages,
-                }
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                answer = data["choices"][0]["message"]["content"]
-                logging.info(f"✅ OpenRouter успешно ответил пользователю {user_id}")
-                return answer
-            else:
-                error_data = response.json() if response.text else {}
-                logging.warning(f"⚠️ OpenRouter вернул код {response.status_code}: {error_data}")
-                return None
-                
-    except Exception as e:
-        logging.error(f"❌ Ошибка OpenRouter для пользователя {user_id}: {e}")
-        return None
-
-async def try_groq(user_id, request_text, history_text, has_photo=False, photo_base64=None):
-    """Запасной вариант через Groq API (только текст, Vision модели устарели)"""
+async def try_groq(user_id, request_text, history_text):
+    """Запасной вариант через Groq API"""
     if not GROQ_API_KEY:
         return None
     
-    # Groq Vision больше не работает - пропускаем фото
-    if has_photo:
-        logging.info(f"⚠️ Groq не поддерживает фото (Vision модели устарели)")
-        return None
-    
     try:
-        logging.info(f"🔄 Пробую Groq API для пользователя {user_id}")
+        logging.info(f"� Пробую Groq API для пользователя {user_id}")
         
         # Формируем историю для Groq
         messages = [{"role": "system", "content": DEFAULT_PROMPT}]
@@ -473,9 +403,8 @@ async def try_groq(user_id, request_text, history_text, has_photo=False, photo_b
             messages.append({"role": "user", "content": history_text})
         
         messages.append({"role": "user", "content": request_text})
-        model = "llama-3.3-70b-versatile"  # Быстрая текстовая модель
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(proxy=PROXY_URL, timeout=30.0) as client:
             response = await client.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={
@@ -483,7 +412,7 @@ async def try_groq(user_id, request_text, history_text, has_photo=False, photo_b
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": model,
+                    "model": "llama-3.3-70b-versatile",  # Быстрая и умная модель
                     "messages": messages,
                     "temperature": 0.7,
                     "max_tokens": 2000
@@ -496,8 +425,7 @@ async def try_groq(user_id, request_text, history_text, has_photo=False, photo_b
                 logging.info(f"✅ Groq API успешно ответил пользователю {user_id}")
                 return answer
             else:
-                error_data = response.json() if response.text else {}
-                logging.warning(f"⚠️ Groq API вернул код {response.status_code}: {error_data}")
+                logging.warning(f"⚠️ Groq API вернул код {response.status_code}")
                 return None
                 
     except Exception as e:
@@ -522,43 +450,24 @@ async def handle_msg(message: types.Message):
     
     current_parts = [g_types.Part(text=request_text)]
     has_photo = False
-    photo_base64 = None
     
     if message.photo:
         has_photo = True
         logging.info(f"📷 Обработка фото от пользователя {user_id}")
         file = await bot.get_file(message.photo[-1].file_id)
         file_bytes = await bot.download_file(file.file_path)
-        photo_data = file_bytes.read()
-        current_parts.append(g_types.Part.from_bytes(data=photo_data, mime_type="image/jpeg"))
-        
-        # Конвертируем в base64 для Groq Vision
-        import base64
-        photo_base64 = base64.b64encode(photo_data).decode('utf-8')
+        current_parts.append(g_types.Part.from_bytes(data=file_bytes.read(), mime_type="image/jpeg"))
     
     # Если пользователь выбрал только Groq
-    if preferred_model == "groq":
-        logging.info(f"⚡ Пользователь {user_id} выбрал Groq")
+    if preferred_model == "groq" and not has_photo:
+        logging.info(f"⚡ Пользователь {user_id} выбрал Groq, пропускаю Gemini")
         
         history_text = ""
         for h in history[-6:]:
             if h.parts and h.parts[0].text:
                 history_text += f"{h.role}: {h.parts[0].text}\n"
         
-        # Сначала пробуем OpenRouter (для фото)
-        if has_photo:
-            openrouter_response = await try_openrouter(user_id, request_text, history_text, has_photo, photo_base64)
-            if openrouter_response:
-                save_history(user_id, "user", request_text)
-                save_history(user_id, "model", openrouter_response)
-                update_stats(user_id)
-                
-                await message.answer(openrouter_response, parse_mode=None)
-                logging.info(f"✅ OpenRouter ответ отправлен пользователю {user_id}")
-                return
-        
-        # Если нет фото или OpenRouter не сработал - пробуем Groq
-        groq_response = await try_groq(user_id, request_text, history_text, has_photo, photo_base64)
+        groq_response = await try_groq(user_id, request_text, history_text)
         
         if groq_response:
             save_history(user_id, "user", request_text)
@@ -569,8 +478,13 @@ async def handle_msg(message: types.Message):
             logging.info(f"✅ Groq ответ отправлен пользователю {user_id}")
             return
         else:
-            await message.answer("⚠️ Все API недоступны. Попробуй позже")
+            await message.answer("⚠️ Groq API недоступен. Попробуй /model auto")
             return
+    
+    # Если пользователь выбрал только Groq, но отправил фото
+    if preferred_model == "groq" and has_photo:
+        await message.answer("⚠️ Groq не поддерживает фото. Используй /model gemini или /model auto")
+        return
     
     # Пробуем модели Gemini (если не выбран только Groq)
     if preferred_model != "groq":
@@ -586,21 +500,12 @@ async def handle_msg(message: types.Message):
                 
                 chat = current_client.chats.create(
                     model=model_name,
-                    config=g_types.GenerateContentConfig(
-                        system_instruction=sys_instruction,
-                        temperature=0.7,
-                        max_output_tokens=2048
-                    ),
+                    config=g_types.GenerateContentConfig(system_instruction=sys_instruction),
                     history=history
                 )
                 
                 logging.info(f"💬 Чат создан для пользователя {user_id}, отправляю сообщение...")
-                
-                # Добавляем таймаут на ответ модели (15 секунд)
-                response = await asyncio.wait_for(
-                    asyncio.to_thread(chat.send_message, message=current_parts),
-                    timeout=15.0
-                )
+                response = chat.send_message(message=current_parts)
                 
                 logging.info(f"📥 Ответ получен от {model_name} для пользователя {user_id}")
                 
@@ -625,10 +530,6 @@ async def handle_msg(message: types.Message):
                     logging.warning(f"⚠️ Пустой ответ от {model_name} для пользователя {user_id}, пробую следующую модель...")
                     continue
                     
-            except asyncio.TimeoutError:
-                logging.warning(f"⏱️ Таймаут модели {model_name} (>15с) для пользователя {user_id}, пробую следующую...")
-                continue
-                
             except Exception as e:
                 error_str = str(e)
                 
@@ -652,29 +553,16 @@ async def handle_msg(message: types.Message):
                     logging.error(f"❌ Ошибка с моделью {model_name} для пользователя {user_id}: {e}")
                     continue
     
-    # Если все Gemini модели не сработали - пробуем OpenRouter и Groq (для auto режима)
-    if preferred_model != "gemini":
-        logging.info(f"🔄 Все Gemini модели недоступны, пробую альтернативы для пользователя {user_id}")
+    # Если все Gemini модели не сработали и нет фото - пробуем Groq (только для auto режима)
+    if not has_photo and preferred_model != "gemini":
+        logging.info(f"🔄 Все Gemini модели недоступны, пробую Groq для пользователя {user_id}")
         
         history_text = ""
         for h in history[-6:]:
             if h.parts and h.parts[0].text:
                 history_text += f"{h.role}: {h.parts[0].text}\n"
         
-        # Сначала пробуем OpenRouter (особенно для фото)
-        if has_photo:
-            openrouter_response = await try_openrouter(user_id, request_text, history_text, has_photo, photo_base64)
-            if openrouter_response:
-                save_history(user_id, "user", request_text)
-                save_history(user_id, "model", openrouter_response)
-                update_stats(user_id)
-                
-                await message.answer(openrouter_response, parse_mode=None)
-                logging.info(f"✅ OpenRouter ответ отправлен пользователю {user_id}")
-                return
-        
-        # Потом пробуем Groq
-        groq_response = await try_groq(user_id, request_text, history_text, has_photo, photo_base64)
+        groq_response = await try_groq(user_id, request_text, history_text)
         
         if groq_response:
             save_history(user_id, "user", request_text)
