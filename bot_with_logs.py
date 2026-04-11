@@ -110,13 +110,6 @@ FALLBACK_MODELS = [
     "gemini-1.5-flash",               # Базовая 1.5
     "gemini-1.5-pro-latest",          # Pro версия
 ]
-    "gemini-flash-latest",            # Последняя flash
-    "gemini-3-flash-preview",         # Flash preview
-    "gemini-3.1-flash-image-preview", # Image preview
-    "gemini-2.0-flash",               # Полная 2.0
-    "gemini-2.0-flash-001",           # Стабильная 2.0
-    "gemini-pro-latest"               # Pro как последний вариант
-]
 
 DEFAULT_PROMPT = """Ты — универсальный школьный помощник. Твоя задача — выдавать готовые решения, которые можно сразу переписывать в тетрадь без исправлений.
 
