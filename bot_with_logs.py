@@ -11,6 +11,39 @@ from google import genai
 from google.genai import types as g_types
 from aiogram.exceptions import TelegramBadRequest
 import httpx
+import easyocr
+from PIL import Image
+import io
+
+# Инициализация EasyOCR (загружается один раз при старте)
+ocr_reader = None
+
+def init_ocr():
+    """Инициализация OCR при первом использовании"""
+    global ocr_reader
+    if ocr_reader is None:
+        logging.info("🔍 Инициализация EasyOCR...")
+        ocr_reader = easyocr.Reader(['ru', 'en'], gpu=False)
+        logging.info("✅ EasyOCR готов к работе")
+    return ocr_reader
+
+async def extract_text_from_image(image_bytes):
+    """Извлечение текста из изображения с помощью OCR"""
+    try:
+        reader = init_ocr()
+        image = Image.open(io.BytesIO(image_bytes))
+        
+        # EasyOCR работает синхронно, запускаем в отдельном потоке
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, reader.readtext, image)
+        
+        # Собираем весь текст
+        text = ' '.join([item[1] for item in result])
+        logging.info(f"📝 OCR извлёк текст: {text[:100]}...")
+        return text
+    except Exception as e:
+        logging.error(f"❌ Ошибка OCR: {e}")
+        return None
 
 # Отслеживание последнего использования каждого ключа
 last_key_usage = {}
@@ -467,9 +500,38 @@ async def handle_msg(message: types.Message):
             await message.answer("⚠️ Groq API недоступен. Попробуй /model auto")
             return
     
-    # Если пользователь выбрал только Groq, но отправил фото
+    # Если пользователь выбрал только Groq, но отправил фото - используем OCR
     if preferred_model == "groq" and has_photo:
-        await message.answer("⚠️ Groq не поддерживает фото. Используй /model gemini или /model auto")
+        logging.info(f"🔍 Пользователь {user_id} выбрал Groq с фото, использую OCR")
+        
+        file = await bot.get_file(message.photo[-1].file_id)
+        file_bytes = await bot.download_file(file.file_path)
+        image_data = file_bytes.read()
+        
+        # Извлекаем текст с фото
+        ocr_text = await extract_text_from_image(image_data)
+        
+        if ocr_text and len(ocr_text.strip()) > 5:
+            # Комбинируем текст пользователя и OCR
+            combined_text = f"{user_text}\n\nТекст с фото:\n{ocr_text}" if user_text.strip() else f"Реши задание:\n{ocr_text}"
+            
+            history_text = ""
+            for h in history[-6:]:
+                if h.parts and h.parts[0].text:
+                    history_text += f"{h.role}: {h.parts[0].text}\n"
+            
+            groq_response = await try_groq(user_id, combined_text, history_text)
+            
+            if groq_response:
+                save_history(user_id, "user", combined_text)
+                save_history(user_id, "model", groq_response)
+                update_stats(user_id)
+                
+                await message.answer(groq_response, parse_mode=None)
+                logging.info(f"✅ Groq ответ (OCR) отправлен пользователю {user_id}")
+                return
+        
+        await message.answer("⚠️ Не удалось распознать текст на фото. Попробуй /model auto для работы с изображениями")
         return
     
     # Пробуем модели Gemini (если не выбран только Groq)
@@ -538,6 +600,36 @@ async def handle_msg(message: types.Message):
                 else:
                     logging.error(f"❌ Ошибка с моделью {model_name} для пользователя {user_id}: {e}")
                     continue
+    
+    # Если все Gemini модели не сработали - пробуем Groq с OCR для фото (только для auto режима)
+    if has_photo and preferred_model != "gemini":
+        logging.info(f"🔄 Все Gemini модели недоступны, пробую Groq + OCR для пользователя {user_id}")
+        
+        file = await bot.get_file(message.photo[-1].file_id)
+        file_bytes = await bot.download_file(file.file_path)
+        image_data = file_bytes.read()
+        
+        # Извлекаем текст с фото
+        ocr_text = await extract_text_from_image(image_data)
+        
+        if ocr_text and len(ocr_text.strip()) > 5:
+            combined_text = f"{user_text}\n\nТекст с фото:\n{ocr_text}" if user_text.strip() else f"Реши задание:\n{ocr_text}"
+            
+            history_text = ""
+            for h in history[-6:]:
+                if h.parts and h.parts[0].text:
+                    history_text += f"{h.role}: {h.parts[0].text}\n"
+            
+            groq_response = await try_groq(user_id, combined_text, history_text)
+            
+            if groq_response:
+                save_history(user_id, "user", combined_text)
+                save_history(user_id, "model", groq_response)
+                update_stats(user_id)
+                
+                await message.answer(groq_response, parse_mode=None)
+                logging.info(f"✅ Groq ответ (OCR fallback) отправлен пользователю {user_id}")
+                return
     
     # Если все Gemini модели не сработали и нет фото - пробуем Groq (только для auto режима)
     if not has_photo and preferred_model != "gemini":
