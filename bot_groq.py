@@ -277,3 +277,44 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+async def ask_groq(user_id, request_text, history):
+    """Запрос к Groq API"""
+    try:
+        logging.info(f"⚡ Отправляю запрос в Groq для пользователя {user_id}")
+        
+        # Формируем историю для Groq
+        messages = [{"role": "system", "content": DEFAULT_PROMPT}]
+        
+        # Добавляем последние 6 сообщений из истории
+        for role, content in history[-6:]:
+            messages.append({"role": role, "content": content})
+        
+        messages.append({"role": "user", "content": request_text})
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": 2000
+                }
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                answer = data["choices"][0]["message"]["content"]
+                logging.info(f"✅ Groq API успешно ответил пользователю {user_id}")
+                return answer
+            else:
+                logging.warning(f"⚠️ Groq API вернул код {response.status_code}")
+                return None
+                
+    except Exception as e:
+        logging.error(f"❌ Ошибка Groq API для пользователя {user_id}: {e}")
+        return None
