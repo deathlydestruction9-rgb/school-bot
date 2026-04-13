@@ -74,90 +74,39 @@ def update_stats(user_id):
                         total_requests = total_requests + 1, 
                         last_request_time = ?""", (user_id, int(time.time()), int(time.time())))
 
-# --- GEMINI VISION ---
-async def extract_text_with_gemini(image_bytes):
-    """Извлечение текста из изображения с помощью Gemini Vision"""
-    # Список моделей для попытки (в порядке приоритета)
-    models_to_try = [
-        'gemini-1.5-flash-8b',        # Самая легкая и быстрая
-        'gemini-1.5-flash',            # Стандартная быстрая
-        'gemini-1.5-flash-latest',     # Последняя версия
-        'gemini-pro-vision',           # Старая стабильная
-    ]
-    
-    for model_name in models_to_try:
-        try:
-            api_key = get_gemini_key()
-            logging.info(f"🔍 Пробую {model_name} для распознавания изображения")
-            
-            client = genai.Client(api_key=api_key)
-            
-            # Создаём запрос с изображением
-            response = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda: client.models.generate_content(
-                        model=model_name,
-                        contents=[
-                            g_types.Content(
-                                role='user',
-                                parts=[
-                                    g_types.Part(text="Извлеки весь текст с этого изображения. Верни только текст, без комментариев."),
-                                    g_types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
-                                ]
-                            )
-                        ]
-                    )
-                ),
-                timeout=10.0
-            )
-            
-            if response.text:
-                text = response.text.strip()
-                logging.info(f"📝 {model_name} извлёк текст: {text[:100]}...")
-                return text
-            else:
-                logging.warning(f"⚠️ {model_name} не вернул текст, пробую следующую модель")
-                continue
-                
-        except asyncio.TimeoutError:
-            logging.error(f"❌ {model_name} таймаут (>10 сек), пробую следующую модель")
-            continue
-        except Exception as e:
-            error_str = str(e)
-            if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-                logging.warning(f"⚠️ {model_name} квота исчерпана, пробую следующую модель")
-                continue
-            elif "404" in error_str or "NOT_FOUND" in error_str:
-                logging.warning(f"⚠️ {model_name} не найдена, пробую следующую модель")
-                continue
-            else:
-                logging.error(f"❌ Ошибка {model_name}: {e}")
-                continue
-    
-    logging.error("❌ Все Gemini модели недоступны")
-    return None
-
-# --- TESSERACT OCR (FALLBACK) ---
+# --- TESSERACT OCR (УЛУЧШЕННЫЙ) ---
 async def extract_text_with_tesseract(image_bytes):
-    """Извлечение текста из изображения с помощью Tesseract OCR (fallback)"""
+    """Извлечение текста из изображения с помощью Tesseract OCR с предобработкой"""
     try:
-        logging.info("🔍 Использую Tesseract OCR (fallback)")
+        logging.info("🔍 Использую Tesseract OCR с предобработкой")
         image = Image.open(io.BytesIO(image_bytes))
         
-        # Уменьшаем размер изображения для ускорения
-        max_size = 1600
-        if image.width > max_size or image.height > max_size:
-            ratio = min(max_size / image.width, max_size / image.height)
-            new_size = (int(image.width * ratio), int(image.height * ratio))
-            image = image.resize(new_size, Image.Resampling.LANCZOS)
-            logging.info(f"📐 Изображение уменьшено до {new_size}")
+        # Конвертируем в RGB если нужно
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
         
-        # Tesseract работает синхронно
+        # Увеличиваем разрешение для лучшего распознавания
+        scale_factor = 2
+        new_size = (image.width * scale_factor, image.height * scale_factor)
+        image = image.resize(new_size, Image.Resampling.LANCZOS)
+        logging.info(f"📐 Изображение увеличено до {new_size} для точности")
+        
+        # Улучшаем контраст и яркость
+        from PIL import ImageEnhance
+        enhancer = ImageEnhance.Contrast(image)
+        image = enhancer.enhance(1.5)
+        enhancer = ImageEnhance.Sharpness(image)
+        image = enhancer.enhance(2.0)
+        
+        # Tesseract с улучшенными параметрами
         loop = asyncio.get_event_loop()
+        custom_config = r'--oem 3 --psm 6'  # LSTM OCR Engine, автоматическое определение блоков
         text = await asyncio.wait_for(
-            loop.run_in_executor(None, lambda: pytesseract.image_to_string(image, lang='rus+eng')),
-            timeout=15.0
+            loop.run_in_executor(
+                None, 
+                lambda: pytesseract.image_to_string(image, lang='rus+eng', config=custom_config)
+            ),
+            timeout=20.0
         )
         
         # Очищаем текст
@@ -171,24 +120,11 @@ async def extract_text_with_tesseract(image_bytes):
             return None
             
     except asyncio.TimeoutError:
-        logging.error("❌ Tesseract таймаут (>15 сек)")
+        logging.error("❌ Tesseract таймаут (>20 сек)")
         return None
     except Exception as e:
         logging.error(f"❌ Ошибка Tesseract: {e}")
         return None
-
-# --- GROQ API ---
-async def ask_groq(user_id, request_text, history):
-    """Запрос к Groq API"""
-    try:
-        logging.info(f"⚡ Отправляю запрос в Groq для пользователя {user_id}")
-        
-        # Формируем историю для Groq
-        messages = [{"role": "system", "content": DEFAULT_PROMPT}]
-        
-        # Добавляем последние 6 сообщений из истории
-        for role, content in history[-6:]:
-            messages.append({"role": role, "content": content})
         
         messages.append({"role": "user", "content": request_text})
         
