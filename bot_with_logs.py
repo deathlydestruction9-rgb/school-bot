@@ -51,10 +51,9 @@ def clean_latex(text):
 # --- КОНФИГУРАЦИЯ ---
 TELEGRAM_TOKEN = '8360715271:AAETGMaf74WPhzkocrWlZvL4gpNz5SkaR-I'
 
-# Несколько API ключей для балансировки нагрузки
+# API ключ Gemini
 GEMINI_API_KEYS = [
-    'AIzaSyC2lMotTBWc-TFmoC1TKN9HMbiq-0irQ4Q',  # Ключ 1 (новый)
-    'AIzaSyA9_1w5qp_S4A7AHqx0DQXMHKp_VVeB3w4',  # Ключ 2 (новый)
+    'AIzaSyAlJ1id_gghgXK2CLeJg4QuzruXdtObJ8U',
 ]
 
 # Groq API ключ (запасной провайдер, 14,400 запросов/день бесплатно)
@@ -102,19 +101,15 @@ def get_next_api_key():
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-CURRENT_MODEL = "gemini-2.0-flash"
+CURRENT_MODEL = "gemini-2.0-flash-lite"
 
 # Список моделей для автоматического переключения (ТОЛЬКО БЫСТРЫЕ!)
 FALLBACK_MODELS = [
-    "gemini-1.5-flash-latest",        # Последняя стабильная
-    "gemini-1.5-flash",               # Базовая 1.5
-    "gemini-1.5-pro-latest",          # Pro версия
-    "gemini-flash-latest",            # Последняя flash
-    "gemini-3-flash-preview",         # Flash preview
-    "gemini-3.1-flash-image-preview", # Image preview
-    "gemini-2.0-flash",               # Полная 2.0
-    "gemini-2.0-flash-001",           # Стабильная 2.0
-    "gemini-pro-latest"               # Pro как последний вариант
+    "gemini-2.0-flash-lite",          # Самая быстрая
+    "gemini-2.0-flash-lite-001",      # Быстрая версия 001
+    "gemini-2.0-flash",               # Стандартная быстрая
+    "gemini-2.0-flash-001",           # Стандартная 001
+    "gemini-2.5-flash",               # Новая быстрая
 ]
 
 DEFAULT_PROMPT = """Ты — универсальный школьный помощник. Твоя задача — выдавать готовые решения, которые можно сразу переписывать в тетрадь без исправлений.
@@ -395,7 +390,7 @@ async def try_groq(user_id, request_text, history_text):
         
         messages.append({"role": "user", "content": request_text})
         
-        async with httpx.AsyncClient(proxy=PROXY_URL, timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={
