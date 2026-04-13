@@ -7,13 +7,26 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import BotCommand
 import httpx
-import pytesseract
-from PIL import Image
-import io
+from google import genai
+from google.genai import types as g_types
 
 # --- КОНФИГУРАЦИЯ ---
 TELEGRAM_TOKEN = '8360715271:AAETGMaf74WPhzkocrWlZvL4gpNz5SkaR-I'
 GROQ_API_KEY = "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"
+
+# Gemini API ключи (для распознавания фото)
+GEMINI_API_KEYS = [
+    'AIzaSyDSEplRZdmRJQTNMvAKumW1ckO9w7pUBbk',
+    'AIzaSyBaPzE8Pdwz5HBMp5QSF-WN8uGMdFnc9JQ',
+]
+current_gemini_key = 0
+
+def get_gemini_key():
+    """Получить следующий Gemini ключ по кругу"""
+    global current_gemini_key
+    key = GEMINI_API_KEYS[current_gemini_key]
+    current_gemini_key = (current_gemini_key + 1) % len(GEMINI_API_KEYS)
+    return key
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
@@ -74,42 +87,48 @@ def update_stats(user_id):
                         total_requests = total_requests + 1, 
                         last_request_time = ?""", (user_id, int(time.time()), int(time.time())))
 
-# --- OCR ---
-async def extract_text_from_image(image_bytes):
-    """Извлечение текста из изображения с помощью Tesseract OCR"""
+# --- GEMINI VISION ---
+async def extract_text_with_gemini(image_bytes):
+    """Извлечение текста из изображения с помощью Gemini Vision"""
     try:
-        image = Image.open(io.BytesIO(image_bytes))
+        api_key = get_gemini_key()
+        logging.info(f"🔍 Использую Gemini для распознавания изображения")
         
-        # Уменьшаем размер изображения для ускорения OCR
-        max_size = 1600
-        if image.width > max_size or image.height > max_size:
-            ratio = min(max_size / image.width, max_size / image.height)
-            new_size = (int(image.width * ratio), int(image.height * ratio))
-            image = image.resize(new_size, Image.Resampling.LANCZOS)
-            logging.info(f"📐 Изображение уменьшено до {new_size}")
+        client = genai.Client(api_key=api_key)
         
-        # Tesseract работает синхронно, запускаем в отдельном потоке
-        loop = asyncio.get_event_loop()
-        text = await asyncio.wait_for(
-            loop.run_in_executor(None, lambda: pytesseract.image_to_string(image, lang='rus+eng')),
-            timeout=15.0
+        # Создаём запрос с изображением
+        response = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: client.models.generate_content(
+                    model='gemini-2.0-flash-lite',
+                    contents=[
+                        g_types.Content(
+                            role='user',
+                            parts=[
+                                g_types.Part(text="Извлеки весь текст с этого изображения. Верни только текст, без комментариев."),
+                                g_types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
+                            ]
+                        )
+                    ]
+                )
+            ),
+            timeout=10.0
         )
         
-        # Очищаем текст от лишних пробелов
-        text = ' '.join(text.split())
-        
-        if text and len(text.strip()) > 5:
-            logging.info(f"📝 OCR извлёк текст: {text[:100]}...")
+        if response.text:
+            text = response.text.strip()
+            logging.info(f"📝 Gemini извлёк текст: {text[:100]}...")
             return text
         else:
-            logging.warning("⚠️ OCR не нашёл текст на изображении")
+            logging.warning("⚠️ Gemini не вернул текст")
             return None
             
     except asyncio.TimeoutError:
-        logging.error("❌ OCR таймаут (>15 сек)")
+        logging.error("❌ Gemini таймаут (>10 сек)")
         return None
     except Exception as e:
-        logging.error(f"❌ Ошибка OCR: {e}")
+        logging.error(f"❌ Ошибка Gemini: {e}")
         return None
 
 # --- GROQ API ---
@@ -200,7 +219,7 @@ async def handle_msg(message: types.Message):
     request_text = user_text if user_text.strip() else "Реши/разбери то, что на фото"
     history = get_history(user_id)
     
-    # Если есть фото - используем OCR
+    # Если есть фото - используем Gemini Vision
     if message.photo:
         logging.info(f"📷 Обработка фото от пользователя {user_id}")
         
@@ -208,11 +227,11 @@ async def handle_msg(message: types.Message):
         file_bytes = await bot.download_file(file.file_path)
         image_data = file_bytes.read()
         
-        # Извлекаем текст с фото
-        ocr_text = await extract_text_from_image(image_data)
+        # Извлекаем текст с фото через Gemini
+        gemini_text = await extract_text_with_gemini(image_data)
         
-        if ocr_text and len(ocr_text.strip()) > 5:
-            combined_text = f"{user_text}\n\nТекст с фото:\n{ocr_text}" if user_text.strip() else f"Реши задание:\n{ocr_text}"
+        if gemini_text and len(gemini_text.strip()) > 5:
+            combined_text = f"{user_text}\n\nТекст с фото:\n{gemini_text}" if user_text.strip() else f"Реши задание:\n{gemini_text}"
             
             groq_response = await ask_groq(user_id, combined_text, history)
             
@@ -222,7 +241,7 @@ async def handle_msg(message: types.Message):
                 update_stats(user_id)
                 
                 await message.answer(groq_response)
-                logging.info(f"✅ Ответ (OCR) отправлен пользователю {user_id}")
+                logging.info(f"✅ Ответ (Gemini+Groq) отправлен пользователю {user_id}")
                 return
         
         await message.answer("⚠️ Не удалось распознать текст на фото. Попробуй отправить текстом.")
