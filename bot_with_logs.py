@@ -683,11 +683,16 @@ async def main():
         init_db()
         logger.info("✅ База данных инициализирована")
         
+        # Инициализируем OCR при старте бота
+        logger.info("🔍 Предзагрузка EasyOCR...")
+        init_ocr()
+        logger.info("✅ EasyOCR предзагружен")
+        
         await bot.set_my_commands([
             BotCommand(command='start', description='🚀 Запуск бота'),
             BotCommand(command='model', description='🎯 Выбор модели'),
             BotCommand(command='clear', description='🧹 Очистить историю'),
-            BotCommand(command='reset', description='� Полный сброс')
+            BotCommand(command='reset', description='🔄 Полный сброс')
         ])
         logger.info("✅ Команды бота установлены")
         
