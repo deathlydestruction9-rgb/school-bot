@@ -14,6 +14,7 @@ import httpx
 import easyocr
 from PIL import Image
 import io
+import numpy as np
 
 # Инициализация EasyOCR (загружается один раз при старте)
 ocr_reader = None
@@ -41,10 +42,13 @@ async def extract_text_from_image(image_bytes):
             image = image.resize(new_size, Image.Resampling.LANCZOS)
             logging.info(f"📐 Изображение уменьшено до {new_size}")
         
+        # Конвертируем PIL Image в numpy array для EasyOCR
+        image_np = np.array(image)
+        
         # EasyOCR работает синхронно, запускаем в отдельном потоке с таймаутом
         loop = asyncio.get_event_loop()
         result = await asyncio.wait_for(
-            loop.run_in_executor(None, reader.readtext, image),
+            loop.run_in_executor(None, reader.readtext, image_np),
             timeout=30.0  # 30 секунд максимум
         )
         
