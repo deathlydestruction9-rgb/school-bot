@@ -101,7 +101,7 @@ async def extract_text_with_gemini(image_bytes):
             asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: client.models.generate_content(
-                    model='gemini-2.0-flash-lite',
+                    model='gemini-1.5-flash',
                     contents=[
                         g_types.Content(
                             role='user',
