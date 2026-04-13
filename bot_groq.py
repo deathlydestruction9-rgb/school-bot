@@ -258,7 +258,7 @@ async def handle_msg(message: types.Message):
     request_text = user_text if user_text.strip() else "Реши/разбери то, что на фото"
     history = get_history(user_id)
     
-    # Если есть фото - используем Tesseract OCR + fallback на OCR.space
+    # Если есть фото - используем OCR.space API (приоритет) + fallback на Tesseract
     if message.photo:
         logging.info(f"📷 Обработка фото от пользователя {user_id}")
         
@@ -266,13 +266,13 @@ async def handle_msg(message: types.Message):
         file_bytes = await bot.download_file(file.file_path)
         image_data = file_bytes.read()
         
-        # Сначала пробуем Tesseract OCR
-        ocr_text = await extract_text_with_tesseract(image_data)
+        # Сначала пробуем OCR.space API (быстрее и точнее)
+        ocr_text = await extract_text_with_ocrspace(image_data)
         
-        # Если Tesseract не справился - используем OCR.space
+        # Если OCR.space не справился (лимит закончился) - используем Tesseract локально
         if not ocr_text or len(ocr_text.strip()) <= 5:
-            logging.info("🔄 Tesseract не справился, пробую OCR.space API")
-            ocr_text = await extract_text_with_ocrspace(image_data)
+            logging.info("🔄 OCR.space не справился, использую локальный Tesseract")
+            ocr_text = await extract_text_with_tesseract(image_data)
         
         if ocr_text and len(ocr_text.strip()) > 5:
             combined_text = f"{user_text}\n\nТекст с фото:\n{ocr_text}" if user_text.strip() else f"Реши задание:\n{ocr_text}"
