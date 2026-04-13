@@ -14,6 +14,7 @@ import io
 # --- КОНФИГУРАЦИЯ ---
 TELEGRAM_TOKEN = '8360715271:AAETGMaf74WPhzkocrWlZvL4gpNz5SkaR-I'
 GROQ_API_KEY = "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"
+OCR_SPACE_API_KEY = "K87899883988957"  # Бесплатный ключ OCR.space
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
@@ -106,7 +107,7 @@ async def extract_text_with_tesseract(image_bytes):
                 None, 
                 lambda: pytesseract.image_to_string(image, lang='rus+eng', config=custom_config)
             ),
-            timeout=20.0
+            timeout=30.0
         )
         
         # Очищаем текст
@@ -120,10 +121,53 @@ async def extract_text_with_tesseract(image_bytes):
             return None
             
     except asyncio.TimeoutError:
-        logging.error("❌ Tesseract таймаут (>20 сек)")
+        logging.error("❌ Tesseract таймаут (>30 сек)")
         return None
     except Exception as e:
         logging.error(f"❌ Ошибка Tesseract: {e}")
+        return None
+
+# --- OCR.SPACE API ---
+async def extract_text_with_ocrspace(image_bytes):
+    """Извлечение текста через OCR.space API (fallback для Tesseract)"""
+    try:
+        logging.info("🌐 Использую OCR.space API")
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://api.ocr.space/parse/image",
+                headers={"apikey": OCR_SPACE_API_KEY},
+                files={"file": ("image.jpg", image_bytes, "image/jpeg")},
+                data={
+                    "language": "rus",
+                    "isOverlayRequired": False,
+                    "detectOrientation": True,
+                    "scale": True,
+                    "OCREngine": 2
+                }
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("ParsedResults"):
+                    text = result["ParsedResults"][0].get("ParsedText", "")
+                    text = ' '.join(text.split())
+                    
+                    if text and len(text.strip()) > 5:
+                        logging.info(f"📝 OCR.space извлёк текст: {text[:100]}...")
+                        return text
+                    else:
+                        logging.warning("⚠️ OCR.space не нашёл текст")
+                        return None
+                else:
+                    logging.warning("⚠️ OCR.space вернул пустой результат")
+                    return None
+            else:
+                logging.warning(f"⚠️ OCR.space вернул код {response.status_code}")
+                return None
+                
+    except Exception as e:
+        logging.error(f"❌ Ошибка OCR.space API: {e}")
         return None
 
 # --- GROQ API ---
@@ -214,7 +258,7 @@ async def handle_msg(message: types.Message):
     request_text = user_text if user_text.strip() else "Реши/разбери то, что на фото"
     history = get_history(user_id)
     
-    # Если есть фото - используем Tesseract OCR
+    # Если есть фото - используем Tesseract OCR + fallback на OCR.space
     if message.photo:
         logging.info(f"📷 Обработка фото от пользователя {user_id}")
         
@@ -222,8 +266,13 @@ async def handle_msg(message: types.Message):
         file_bytes = await bot.download_file(file.file_path)
         image_data = file_bytes.read()
         
-        # Извлекаем текст с фото через Tesseract
+        # Сначала пробуем Tesseract OCR
         ocr_text = await extract_text_with_tesseract(image_data)
+        
+        # Если Tesseract не справился - используем OCR.space
+        if not ocr_text or len(ocr_text.strip()) <= 5:
+            logging.info("🔄 Tesseract не справился, пробую OCR.space API")
+            ocr_text = await extract_text_with_ocrspace(image_data)
         
         if ocr_text and len(ocr_text.strip()) > 5:
             combined_text = f"{user_text}\n\nТекст с фото:\n{ocr_text}" if user_text.strip() else f"Реши задание:\n{ocr_text}"
