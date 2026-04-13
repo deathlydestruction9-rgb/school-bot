@@ -92,10 +92,10 @@ async def extract_text_with_gemini(image_bytes):
     """Извлечение текста из изображения с помощью Gemini Vision"""
     # Список моделей для попытки (в порядке приоритета)
     models_to_try = [
-        'gemini-2.0-flash-lite',
-        'gemini-2.0-flash-lite-001',
-        'gemini-2.0-flash',
-        'gemini-2.5-flash',
+        'gemini-1.5-flash-8b',        # Самая легкая и быстрая
+        'gemini-1.5-flash',            # Стандартная быстрая
+        'gemini-1.5-flash-latest',     # Последняя версия
+        'gemini-pro-vision',           # Старая стабильная
     ]
     
     for model_name in models_to_try:
