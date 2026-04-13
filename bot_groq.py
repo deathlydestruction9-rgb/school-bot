@@ -90,46 +90,66 @@ def update_stats(user_id):
 # --- GEMINI VISION ---
 async def extract_text_with_gemini(image_bytes):
     """Извлечение текста из изображения с помощью Gemini Vision"""
-    try:
-        api_key = get_gemini_key()
-        logging.info(f"🔍 Использую Gemini для распознавания изображения")
-        
-        client = genai.Client(api_key=api_key)
-        
-        # Создаём запрос с изображением
-        response = await asyncio.wait_for(
-            asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: client.models.generate_content(
-                    model='gemini-1.5-flash',
-                    contents=[
-                        g_types.Content(
-                            role='user',
-                            parts=[
-                                g_types.Part(text="Извлеки весь текст с этого изображения. Верни только текст, без комментариев."),
-                                g_types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
-                            ]
-                        )
-                    ]
-                )
-            ),
-            timeout=10.0
-        )
-        
-        if response.text:
-            text = response.text.strip()
-            logging.info(f"📝 Gemini извлёк текст: {text[:100]}...")
-            return text
-        else:
-            logging.warning("⚠️ Gemini не вернул текст")
-            return None
+    # Список моделей для попытки (в порядке приоритета)
+    models_to_try = [
+        'gemini-2.0-flash-lite',
+        'gemini-2.0-flash-lite-001',
+        'gemini-2.0-flash',
+        'gemini-2.5-flash',
+    ]
+    
+    for model_name in models_to_try:
+        try:
+            api_key = get_gemini_key()
+            logging.info(f"🔍 Пробую {model_name} для распознавания изображения")
             
-    except asyncio.TimeoutError:
-        logging.error("❌ Gemini таймаут (>10 сек)")
-        return None
-    except Exception as e:
-        logging.error(f"❌ Ошибка Gemini: {e}")
-        return None
+            client = genai.Client(api_key=api_key)
+            
+            # Создаём запрос с изображением
+            response = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: client.models.generate_content(
+                        model=model_name,
+                        contents=[
+                            g_types.Content(
+                                role='user',
+                                parts=[
+                                    g_types.Part(text="Извлеки весь текст с этого изображения. Верни только текст, без комментариев."),
+                                    g_types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
+                                ]
+                            )
+                        ]
+                    )
+                ),
+                timeout=10.0
+            )
+            
+            if response.text:
+                text = response.text.strip()
+                logging.info(f"📝 {model_name} извлёк текст: {text[:100]}...")
+                return text
+            else:
+                logging.warning(f"⚠️ {model_name} не вернул текст, пробую следующую модель")
+                continue
+                
+        except asyncio.TimeoutError:
+            logging.error(f"❌ {model_name} таймаут (>10 сек), пробую следующую модель")
+            continue
+        except Exception as e:
+            error_str = str(e)
+            if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                logging.warning(f"⚠️ {model_name} квота исчерпана, пробую следующую модель")
+                continue
+            elif "404" in error_str or "NOT_FOUND" in error_str:
+                logging.warning(f"⚠️ {model_name} не найдена, пробую следующую модель")
+                continue
+            else:
+                logging.error(f"❌ Ошибка {model_name}: {e}")
+                continue
+    
+    logging.error("❌ Все Gemini модели недоступны")
+    return None
 
 # --- GROQ API ---
 async def ask_groq(user_id, request_text, history):
