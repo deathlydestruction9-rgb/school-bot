@@ -11,53 +11,42 @@ from google import genai
 from google.genai import types as g_types
 from aiogram.exceptions import TelegramBadRequest
 import httpx
-import easyocr
+import pytesseract
 from PIL import Image
 import io
-import numpy as np
-
-# Инициализация EasyOCR (загружается один раз при старте)
-ocr_reader = None
-
-def init_ocr():
-    """Инициализация OCR при первом использовании"""
-    global ocr_reader
-    if ocr_reader is None:
-        logging.info("🔍 Инициализация EasyOCR...")
-        ocr_reader = easyocr.Reader(['ru', 'en'], gpu=False)
-        logging.info("✅ EasyOCR готов к работе")
-    return ocr_reader
 
 async def extract_text_from_image(image_bytes):
-    """Извлечение текста из изображения с помощью OCR"""
+    """Извлечение текста из изображения с помощью Tesseract OCR"""
     try:
-        reader = init_ocr()
         image = Image.open(io.BytesIO(image_bytes))
         
         # Уменьшаем размер изображения для ускорения OCR
-        max_size = 1024
+        max_size = 1600
         if image.width > max_size or image.height > max_size:
             ratio = min(max_size / image.width, max_size / image.height)
             new_size = (int(image.width * ratio), int(image.height * ratio))
             image = image.resize(new_size, Image.Resampling.LANCZOS)
             logging.info(f"📐 Изображение уменьшено до {new_size}")
         
-        # Конвертируем PIL Image в numpy array для EasyOCR
-        image_np = np.array(image)
-        
-        # EasyOCR работает синхронно, запускаем в отдельном потоке с таймаутом
+        # Tesseract работает синхронно, запускаем в отдельном потоке
         loop = asyncio.get_event_loop()
-        result = await asyncio.wait_for(
-            loop.run_in_executor(None, reader.readtext, image_np),
-            timeout=30.0  # 30 секунд максимум
+        text = await asyncio.wait_for(
+            loop.run_in_executor(None, lambda: pytesseract.image_to_string(image, lang='rus+eng')),
+            timeout=15.0  # 15 секунд максимум
         )
         
-        # Собираем весь текст
-        text = ' '.join([item[1] for item in result])
-        logging.info(f"📝 OCR извлёк текст: {text[:100]}...")
-        return text
+        # Очищаем текст от лишних пробелов
+        text = ' '.join(text.split())
+        
+        if text and len(text.strip()) > 5:
+            logging.info(f"📝 OCR извлёк текст: {text[:100]}...")
+            return text
+        else:
+            logging.warning("⚠️ OCR не нашёл текст на изображении")
+            return None
+            
     except asyncio.TimeoutError:
-        logging.error("❌ OCR таймаут (>30 сек)")
+        logging.error("❌ OCR таймаут (>15 сек)")
         return None
     except Exception as e:
         logging.error(f"❌ Ошибка OCR: {e}")
@@ -700,11 +689,6 @@ async def main():
     try:
         init_db()
         logger.info("✅ База данных инициализирована")
-        
-        # Инициализируем OCR при старте бота
-        logger.info("🔍 Предзагрузка EasyOCR...")
-        init_ocr()
-        logger.info("✅ EasyOCR предзагружен")
         
         await bot.set_my_commands([
             BotCommand(command='start', description='🚀 Запуск бота'),
