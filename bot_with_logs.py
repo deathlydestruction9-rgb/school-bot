@@ -33,14 +33,28 @@ async def extract_text_from_image(image_bytes):
         reader = init_ocr()
         image = Image.open(io.BytesIO(image_bytes))
         
-        # EasyOCR работает синхронно, запускаем в отдельном потоке
+        # Уменьшаем размер изображения для ускорения OCR
+        max_size = 1024
+        if image.width > max_size or image.height > max_size:
+            ratio = min(max_size / image.width, max_size / image.height)
+            new_size = (int(image.width * ratio), int(image.height * ratio))
+            image = image.resize(new_size, Image.Resampling.LANCZOS)
+            logging.info(f"📐 Изображение уменьшено до {new_size}")
+        
+        # EasyOCR работает синхронно, запускаем в отдельном потоке с таймаутом
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, reader.readtext, image)
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, reader.readtext, image),
+            timeout=30.0  # 30 секунд максимум
+        )
         
         # Собираем весь текст
         text = ' '.join([item[1] for item in result])
         logging.info(f"📝 OCR извлёк текст: {text[:100]}...")
         return text
+    except asyncio.TimeoutError:
+        logging.error("❌ OCR таймаут (>30 сек)")
+        return None
     except Exception as e:
         logging.error(f"❌ Ошибка OCR: {e}")
         return None
