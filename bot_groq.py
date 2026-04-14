@@ -14,7 +14,7 @@ import io
 # --- КОНФИГУРАЦИЯ ---
 TELEGRAM_TOKEN = '8360715271:AAETGMaf74WPhzkocrWlZvL4gpNz5SkaR-I'
 GROQ_API_KEY = "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"
-OCR_SPACE_API_KEY = "K87899883988957"  # Бесплатный ключ OCR.space
+OCR_SPACE_API_KEY = "K89186823288957"  # OCR.space API ключ
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
